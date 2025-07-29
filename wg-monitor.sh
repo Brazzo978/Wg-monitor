@@ -22,7 +22,16 @@ CONFIG_FILE="$STATE_DIR/config"
 SERVICE_UNIT="/etc/systemd/system/wg-monitor.service"
 TIMER_UNIT="/etc/systemd/system/wg-monitor.timer"
 DEBUG_LOG="$LOG_DIR/debug.log"
-STALE_THRESHOLD=120  # secondi per considerare un peer offline
+# soglia di inattivita' (secondi) oltre la quale un peer e' considerato offline
+STALE_THRESHOLD_DEFAULT=120
+if [[ -f "$CONFIG_FILE" ]]; then
+    cfg_thr=$(sed -n '4p' "$CONFIG_FILE")
+    [[ -n "$cfg_thr" ]] && STALE_THRESHOLD=$cfg_thr || STALE_THRESHOLD=$STALE_THRESHOLD_DEFAULT
+else
+    STALE_THRESHOLD=$STALE_THRESHOLD_DEFAULT
+fi
+PREV_TS_FILE="$STATE_DIR/prev_ts"
+CUR_TS_FILE="$STATE_DIR/cur_ts"
 
 # --- Funzioni ---
 setup_install() {
@@ -56,6 +65,16 @@ setup_install() {
         read -rp "Ogni quanti secondi vuoi eseguire il controllo? " INTERVAL
         [[ ! "$INTERVAL" =~ ^[1-9][0-9]*$ ]] && echo "❌ Intervallo non valido. Inserisci >0."
     done
+
+    # Soglia offline
+    until [[ "$THRESH" =~ ^[1-9][0-9]*$ ]]; do
+        read -rp "Dopo quanti secondi senza handshake il peer è offline? [${STALE_THRESHOLD_DEFAULT}] " THRESH
+        [[ -z "$THRESH" ]] && THRESH=$STALE_THRESHOLD_DEFAULT
+        [[ ! "$THRESH" =~ ^[1-9][0-9]*$ ]] && { echo "❌ Valore non valido."; THRESH=""; }
+    done
+
+    echo "$INTERVAL" >> "$CONFIG_FILE"
+    echo "$THRESH" >> "$CONFIG_FILE"
 
     # Creazione unità systemd
     cat > "$SERVICE_UNIT" <<EOF
@@ -105,7 +124,7 @@ load_friendly() {
 
 # Parsaggio stato in CSV con friendly name e timestamp handshake
 parse_state() {
-    local file="$1"
+    local file="$1" ts_file="$2"
     load_friendly
     echo "[DEBUG $(date '+%F %T')] parse_state start" >> "$DEBUG_LOG"
 
@@ -116,6 +135,7 @@ parse_state() {
         # CSV: pubkey,local_ip,endpoint,handshake_unix,friendly
         echo "$pub,$local_ip,$endpoint,$handshake,$name"
     done > "$file"
+    date +%s > "$ts_file"
     echo "[DEBUG] wrote state $file" >> "$DEBUG_LOG"
 }
 
@@ -123,10 +143,11 @@ parse_state() {
 do_monitor() {
     mkdir -p "$LOG_DIR" "$STATE_DIR"
     echo "[DEBUG $(date '+%F %T')] do_monitor invoked" >> "$DEBUG_LOG"
-    parse_state "$CUR_CSV"
-    [[ ! -f "$PREV_CSV" ]] && { mv "$CUR_CSV" "$PREV_CSV"; exit 0; }
+    parse_state "$CUR_CSV" "$CUR_TS_FILE"
+    [[ ! -f "$PREV_CSV" ]] && { mv "$CUR_CSV" "$PREV_CSV"; mv "$CUR_TS_FILE" "$PREV_TS_FILE"; exit 0; }
 
-    local now=$(date +%s)
+    local now=$(cat "$CUR_TS_FILE")
+    local prev_now=$(cat "$PREV_TS_FILE")
     declare -A prev_hsh prev_end prev_loc prev_name
     while IFS=, read -r pub loc end hsh name; do
         prev_hsh["$pub"]=$hsh
@@ -139,9 +160,9 @@ do_monitor() {
         timestamp="$(date '+%F %T')"
         label="$loc"; [[ -n "$name" ]] && label="$name ($loc)"
         # Stato offline se era online e ora stale
-        prev_stale=$(( now - prev_hsh[$pub] > STALE_THRESHOLD ))
+        prev_stale=$(( prev_now - prev_hsh[$pub] > STALE_THRESHOLD ))
         curr_stale=$(( now - hsh > STALE_THRESHOLD ))
-        if [[ -n "${prev_hsh[$pub]}" && ! $prev_stale -eq 1 && $curr_stale -eq 1 ]]; then
+        if [[ -n "${prev_hsh[$pub]}" && $prev_stale -eq 0 && $curr_stale -eq 1 ]]; then
             echo "[$timestamp] Client $label offline (nessun handshake >${STALE_THRESHOLD}s)" >> "$LOG_DIR/$(date +%F).log"
         fi
         # Connessioni e cambio ip
@@ -162,6 +183,7 @@ do_monitor() {
     done
 
     mv "$CUR_CSV" "$PREV_CSV"
+    mv "$CUR_TS_FILE" "$PREV_TS_FILE"
 }
 
 # Menu e main
