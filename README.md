@@ -7,3 +7,5 @@ Download and execute the script. Answer the questions asked by the script and it
 wget https://raw.githubusercontent.com/Brazzo978/Wg-monitor/refs/heads/main/wg-monitor.sh
 bash ./wg-monitor.sh
 ```
+
+Debug logging is disabled by default and can be toggled from the script menu after installation.

@@ -22,11 +22,15 @@ CONFIG_FILE="$STATE_DIR/config"
 SERVICE_UNIT="/etc/systemd/system/wg-monitor.service"
 TIMER_UNIT="/etc/systemd/system/wg-monitor.timer"
 DEBUG_LOG="$LOG_DIR/debug.log"
+# Debug mode (0=off, 1=on)
+DEBUG_MODE=0
 # soglia di inattivita' (secondi) oltre la quale un peer e' considerato offline
 STALE_THRESHOLD_DEFAULT=120
 if [[ -f "$CONFIG_FILE" ]]; then
     cfg_thr=$(sed -n '4p' "$CONFIG_FILE")
     [[ -n "$cfg_thr" ]] && STALE_THRESHOLD=$cfg_thr || STALE_THRESHOLD=$STALE_THRESHOLD_DEFAULT
+    cfg_dbg=$(sed -n '5p' "$CONFIG_FILE")
+    [[ -n "$cfg_dbg" ]] && DEBUG_MODE=$cfg_dbg
 else
     STALE_THRESHOLD=$STALE_THRESHOLD_DEFAULT
 fi
@@ -75,6 +79,7 @@ setup_install() {
 
     echo "$INTERVAL" >> "$CONFIG_FILE"
     echo "$THRESH" >> "$CONFIG_FILE"
+    echo "0" >> "$CONFIG_FILE"  # debug off by default
 
     # Creazione unità systemd
     cat > "$SERVICE_UNIT" <<EOF
@@ -126,23 +131,33 @@ load_friendly() {
 parse_state() {
     local file="$1" ts_file="$2"
     load_friendly
-    echo "[DEBUG $(date '+%F %T')] parse_state start" >> "$DEBUG_LOG"
+    [[ $DEBUG_MODE -eq 1 ]] && echo "[DEBUG $(date '+%F %T')] parse_state start" >> "$DEBUG_LOG"
 
     read -r iface <"$CONFIG_FILE"
-    wg show "$iface" dump 2>>"$DEBUG_LOG" | while IFS=$'\t' read -r pub preshared endpoint allowed handshake rx tx keep; do
-        IFS=, read -r local_ip _ <<< "$allowed"
-        local name="${friendly_map[$pub]}"
-        # CSV: pubkey,local_ip,endpoint,handshake_unix,friendly
-        echo "$pub,$local_ip,$endpoint,$handshake,$name"
-    done > "$file"
+    if [[ $DEBUG_MODE -eq 1 ]]; then
+        wg show "$iface" dump 2>>"$DEBUG_LOG" |
+            while IFS=$'\t' read -r pub preshared endpoint allowed handshake rx tx keep; do
+                IFS=, read -r local_ip _ <<< "$allowed"
+                local name="${friendly_map[$pub]}"
+                # CSV: pubkey,local_ip,endpoint,handshake_unix,friendly
+                echo "$pub,$local_ip,$endpoint,$handshake,$name"
+            done > "$file"
+    else
+        wg show "$iface" dump 2>/dev/null |
+            while IFS=$'\t' read -r pub preshared endpoint allowed handshake rx tx keep; do
+                IFS=, read -r local_ip _ <<< "$allowed"
+                local name="${friendly_map[$pub]}"
+                echo "$pub,$local_ip,$endpoint,$handshake,$name"
+            done > "$file"
+    fi
     date +%s > "$ts_file"
-    echo "[DEBUG] wrote state $file" >> "$DEBUG_LOG"
+    [[ $DEBUG_MODE -eq 1 ]] && echo "[DEBUG] wrote state $file" >> "$DEBUG_LOG"
 }
 
 # Monitoraggio
 do_monitor() {
     mkdir -p "$LOG_DIR" "$STATE_DIR"
-    echo "[DEBUG $(date '+%F %T')] do_monitor invoked" >> "$DEBUG_LOG"
+    [[ $DEBUG_MODE -eq 1 ]] && echo "[DEBUG $(date '+%F %T')] do_monitor invoked" >> "$DEBUG_LOG"
     parse_state "$CUR_CSV" "$CUR_TS_FILE"
     [[ ! -f "$PREV_CSV" ]] && { mv "$CUR_CSV" "$PREV_CSV"; mv "$CUR_TS_FILE" "$PREV_TS_FILE"; exit 0; }
 
@@ -189,15 +204,16 @@ do_monitor() {
 # Menu e main
 show_menu() {
     PS3="Scegli un'opzione: "
-    local options=("Stato servizio" "Riavvia servizio" "Abilita/Disabilita" "Pulisci log >1 mese" "Rimuovi tutto" "Esci")
+    local options=("Stato servizio" "Riavvia servizio" "Abilita/Disabilita" "Pulisci log >1 mese" "Toggle debug" "Rimuovi tutto" "Esci")
     select opt in "${options[@]}"; do
         case $REPLY in
             1) systemctl status wg-monitor.timer --no-pager;;
             2) systemctl restart wg-monitor.timer; echo "Servizio riavviato";;
             3) if systemctl is-enabled wg-monitor.timer &>/dev/null; then systemctl disable --now wg-monitor.timer; echo "Disabilitato"; else systemctl enable --now wg-monitor.timer; echo "Abilitato"; fi;;
             4) find "$LOG_DIR" -type f -mtime +30 -delete; echo "Log >1 mese cancellati";;
-            5) systemctl disable --now wg-monitor.timer; rm -f "$SERVICE_UNIT" "$TIMER_UNIT"; systemctl daemon-reload; rm -r "$STATE_DIR" "$LOG_DIR"; echo "Tutto rimosso"; exit;;
-            6) exit;;
+            5) if [[ $DEBUG_MODE -eq 1 ]]; then DEBUG_MODE=0; else DEBUG_MODE=1; fi; sed -i "5c$DEBUG_MODE" "$CONFIG_FILE"; echo "Debug $([[ $DEBUG_MODE -eq 1 ]] && echo 'attivato' || echo 'disattivato')";;
+            6) systemctl disable --now wg-monitor.timer; rm -f "$SERVICE_UNIT" "$TIMER_UNIT"; systemctl daemon-reload; rm -r "$STATE_DIR" "$LOG_DIR"; echo "Tutto rimosso"; exit;;
+            7) exit;;
             *) echo "Opzione non valida";;
         esac
     done
