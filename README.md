@@ -23,14 +23,8 @@ following options:
 Each day the script creates a new text file in `/root/logwg` where it logs state
 changes for each client. Example output:
 [2025-07-29 12:18:07] New remote IP for client 10.0.0.2/32: 1.1.1.1:56439
+
 [2025-07-29 12:20:07] Client 10.0.0.2/32 offline (no handshake >120s)
+
 [2025-07-29 13:43:22] New connection for client 10.0.0.3/32 from remote IP (none)
-[2025-07-29 13:49:42] New remote IP for client 10.0.0.3/32: 1.1.1.1:44166
-[2025-07-29 13:50:02] New remote IP for client 10.0.0.3/32: 2.2.2.2:60737
-[2025-07-29 13:50:22] New remote IP for client 10.0.0.2/32: 1.1.1.1:44225
-[2025-07-29 13:50:42] New remote IP for client 10.0.0.2/32: 3.3.3.3:23863
-[2025-07-29 13:50:52] New remote IP for client 10.0.0.2/32: 1.1.1.1:44225
-[2025-07-29 13:51:02] New remote IP for client 10.0.0.3/32: 2.2.2.2:60738
-[2025-07-29 13:53:02] Client 10.0.0.3/32 offline (no handshake >120s)
-[2025-07-29 13:54:22] Client 10.0.0.2/32 offline (no handshake >120s).
 
