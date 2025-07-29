@@ -1,18 +1,18 @@
 #!/bin/bash
-# wg-monitor.sh – Monitora un singolo server WireGuard e logga ogni variazione di stato (connessione, cambio IP, offline/online) in modo strutturato
-# Compatibile Debian, auto‑commentato con sanity-check sugli input, parsing del friendly name e debug.
+# wg-monitor.sh - Monitor a single WireGuard server and log each state change (connection, IP change, offline/online) in a structured format.
+# Compatible with Debian, with input sanity checks, friendly name parsing and debug support.
 
-# --- Controlli preliminari ---
+# --- Preliminary checks ---
 if [[ $EUID -ne 0 ]]; then
-    echo "❌ Devi eseguire come root"
+    echo "❌ You must run as root"
     exit 1
 fi
 if ! command -v wg &>/dev/null; then
-    echo "❌ WireGuard ('wg') non installato. Installa con: apt update && apt install wireguard"
+    echo "❌ WireGuard ('wg') not installed. Install with: apt update && apt install wireguard"
     exit 1
 fi
 
-# Percorsi e file
+# Paths and files
 SCRIPT_PATH=$(realpath "$0")
 LOG_DIR="/root/logwg"
 STATE_DIR="/var/lib/wg-monitor"
@@ -24,7 +24,7 @@ TIMER_UNIT="/etc/systemd/system/wg-monitor.timer"
 DEBUG_LOG="$LOG_DIR/debug.log"
 # Debug mode (0=off, 1=on)
 DEBUG_MODE=0
-# soglia di inattivita' (secondi) oltre la quale un peer e' considerato offline
+# inactivity threshold (seconds) after which a peer is considered offline
 STALE_THRESHOLD_DEFAULT=120
 if [[ -f "$CONFIG_FILE" ]]; then
     cfg_thr=$(sed -n '4p' "$CONFIG_FILE")
@@ -44,10 +44,10 @@ setup_install() {
 
     # Interfacce WireGuard
     mapfile -t ifs < <(wg show interfaces)
-    [[ ${#ifs[@]} -eq 0 ]] && { echo "❌ Nessuna interfaccia WireGuard trovata"; exit 1; }
+    [[ ${#ifs[@]} -eq 0 ]] && { echo "❌ No WireGuard interface found"; exit 1; }
 
-    echo "Seleziona l'interfaccia WireGuard da monitorare:"
-    PS3="Interfaccia (numero) > "
+    echo "Select the WireGuard interface to monitor:"
+    PS3="Interface (number) > "
     unset iface conf_file
     until [[ -n "$iface" ]]; do
         select sel in "${ifs[@]}"; do
@@ -56,9 +56,9 @@ setup_install() {
                 conf_file="/etc/wireguard/${iface}.conf"
                 echo "$iface" > "$CONFIG_FILE"
                 echo "$conf_file" >> "$CONFIG_FILE"
-                echo "Interfaccia selezionata: $iface"
+                echo "Selected interface: $iface"
             else
-                echo "Scelta non valida. Riprova."
+                echo "Invalid choice. Try again."
             fi
             break
         done
@@ -66,22 +66,22 @@ setup_install() {
 
     # Intervallo di controllo
     until [[ "$INTERVAL" =~ ^[1-9][0-9]*$ ]]; do
-        read -rp "Ogni quanti secondi vuoi eseguire il controllo? " INTERVAL
-        [[ ! "$INTERVAL" =~ ^[1-9][0-9]*$ ]] && echo "❌ Intervallo non valido. Inserisci >0."
+        read -rp "How many seconds between checks? " INTERVAL
+        [[ ! "$INTERVAL" =~ ^[1-9][0-9]*$ ]] && echo "❌ Invalid interval. Enter >0."
     done
 
     # Soglia offline
     until [[ "$THRESH" =~ ^[1-9][0-9]*$ ]]; do
-        read -rp "Dopo quanti secondi senza handshake il peer è offline? [${STALE_THRESHOLD_DEFAULT}] " THRESH
+        read -rp "After how many seconds without a handshake is the peer offline? [${STALE_THRESHOLD_DEFAULT}] " THRESH
         [[ -z "$THRESH" ]] && THRESH=$STALE_THRESHOLD_DEFAULT
-        [[ ! "$THRESH" =~ ^[1-9][0-9]*$ ]] && { echo "❌ Valore non valido."; THRESH=""; }
+        [[ ! "$THRESH" =~ ^[1-9][0-9]*$ ]] && { echo "❌ Invalid value."; THRESH=""; }
     done
 
     echo "$INTERVAL" >> "$CONFIG_FILE"
     echo "$THRESH" >> "$CONFIG_FILE"
     echo "0" >> "$CONFIG_FILE"  # debug off by default
 
-    # Creazione unità systemd
+    # Create systemd units
     cat > "$SERVICE_UNIT" <<EOF
 [Unit]
 Description=Monitor WireGuard peer ($iface)
@@ -92,7 +92,7 @@ ExecStart=/bin/bash $SCRIPT_PATH monitor
 EOF
     cat > "$TIMER_UNIT" <<EOF
 [Unit]
-Description=Timer per monitor WireGuard peer ($iface)
+Description=Timer for WireGuard monitor ($iface)
 
 [Timer]
 OnBootSec=1min
@@ -104,10 +104,10 @@ EOF
     chmod 644 "$SERVICE_UNIT" "$TIMER_UNIT"
     systemctl daemon-reload
     systemctl enable --now wg-monitor.timer
-    echo "✅ Setup completato: monitoraggio di '$iface' ogni $INTERVAL secondi"
+    echo "✅ Setup complete: monitoring '$iface' every $INTERVAL seconds"
 }
 
-# Carica mapping pubkey -> friendly name da file .conf
+# Load pubkey -> friendly name mapping from .conf file
 load_friendly() {
     declare -gA friendly_map
     local current_name=""
@@ -127,7 +127,7 @@ load_friendly() {
     done < "$conf_file"
 }
 
-# Parsaggio stato in CSV con friendly name e timestamp handshake
+# Parse state to CSV with friendly name and handshake timestamp
 parse_state() {
     local file="$1" ts_file="$2"
     load_friendly
@@ -154,7 +154,7 @@ parse_state() {
     [[ $DEBUG_MODE -eq 1 ]] && echo "[DEBUG] wrote state $file" >> "$DEBUG_LOG"
 }
 
-# Monitoraggio
+# Monitoring
 do_monitor() {
     mkdir -p "$LOG_DIR" "$STATE_DIR"
     [[ $DEBUG_MODE -eq 1 ]] && echo "[DEBUG $(date '+%F %T')] do_monitor invoked" >> "$DEBUG_LOG"
@@ -174,47 +174,47 @@ do_monitor() {
     while IFS=, read -r pub loc end hsh name; do
         timestamp="$(date '+%F %T')"
         label="$loc"; [[ -n "$name" ]] && label="$name ($loc)"
-        # Stato offline se era online e ora stale
+        # Peer offline if previously online and now stale
         prev_stale=$(( prev_now - prev_hsh[$pub] > STALE_THRESHOLD ))
         curr_stale=$(( now - hsh > STALE_THRESHOLD ))
         if [[ -n "${prev_hsh[$pub]}" && $prev_stale -eq 0 && $curr_stale -eq 1 ]]; then
-            echo "[$timestamp] Client $label offline (nessun handshake >${STALE_THRESHOLD}s)" >> "$LOG_DIR/$(date +%F).log"
+            echo "[$timestamp] Client $label offline (no handshake >${STALE_THRESHOLD}s)" >> "$LOG_DIR/$(date +%F).log"
         fi
-        # Connessioni e cambio ip
+        # Connections and IP changes
         if [[ -z "${prev_end[$pub]}" ]]; then
-            echo "[$timestamp] Nuova connessione per client $label da ip remoto $end" >> "$LOG_DIR/$(date +%F).log"
+            echo "[$timestamp] New connection for client $label from remote IP $end" >> "$LOG_DIR/$(date +%F).log"
         elif [[ "${prev_end[$pub]}" != "$end" ]]; then
-            echo "[$timestamp] Nuovo ip remoto per client $label: $end" >> "$LOG_DIR/$(date +%F).log"
+            echo "[$timestamp] New remote IP for client $label: $end" >> "$LOG_DIR/$(date +%F).log"
         fi
         unset prev_end["$pub"] prev_loc["$pub"] prev_name["$pub"] prev_hsh["$pub"]
     done < "$CUR_CSV"
 
-    # Disconnessioni (rimozione peer)
+    # Disconnections (peer removal)
     for pub in "${!prev_end[@]}"; do
         timestamp="$(date '+%F %T')"
         loc="${prev_loc[$pub]}"; name="${prev_name[$pub]}"
         label="$loc"; [[ -n "$name" ]] && label="$name ($loc)"
-        echo "[$timestamp] Client $label disconnesso" >> "$LOG_DIR/$(date +%F).log"
+        echo "[$timestamp] Client $label disconnected" >> "$LOG_DIR/$(date +%F).log"
     done
 
     mv "$CUR_CSV" "$PREV_CSV"
     mv "$CUR_TS_FILE" "$PREV_TS_FILE"
 }
 
-# Menu e main
+# Menu and main
 show_menu() {
-    PS3="Scegli un'opzione: "
-    local options=("Stato servizio" "Riavvia servizio" "Abilita/Disabilita" "Pulisci log >1 mese" "Toggle debug" "Rimuovi tutto" "Esci")
+    PS3="Choose an option: "
+    local options=("Service status" "Restart service" "Enable/Disable" "Clean logs >1 month" "Toggle debug" "Remove everything" "Exit")
     select opt in "${options[@]}"; do
         case $REPLY in
             1) systemctl status wg-monitor.timer --no-pager;;
-            2) systemctl restart wg-monitor.timer; echo "Servizio riavviato";;
-            3) if systemctl is-enabled wg-monitor.timer &>/dev/null; then systemctl disable --now wg-monitor.timer; echo "Disabilitato"; else systemctl enable --now wg-monitor.timer; echo "Abilitato"; fi;;
-            4) find "$LOG_DIR" -type f -mtime +30 -delete; echo "Log >1 mese cancellati";;
-            5) if [[ $DEBUG_MODE -eq 1 ]]; then DEBUG_MODE=0; else DEBUG_MODE=1; fi; sed -i "5c$DEBUG_MODE" "$CONFIG_FILE"; echo "Debug $([[ $DEBUG_MODE -eq 1 ]] && echo 'attivato' || echo 'disattivato')";;
-            6) systemctl disable --now wg-monitor.timer; rm -f "$SERVICE_UNIT" "$TIMER_UNIT"; systemctl daemon-reload; rm -r "$STATE_DIR" "$LOG_DIR"; echo "Tutto rimosso"; exit;;
+            2) systemctl restart wg-monitor.timer; echo "Service restarted";;
+            3) if systemctl is-enabled wg-monitor.timer &>/dev/null; then systemctl disable --now wg-monitor.timer; echo "Disabled"; else systemctl enable --now wg-monitor.timer; echo "Enabled"; fi;;
+            4) find "$LOG_DIR" -type f -mtime +30 -delete; echo "Logs older than 1 month deleted";;
+            5) if [[ $DEBUG_MODE -eq 1 ]]; then DEBUG_MODE=0; else DEBUG_MODE=1; fi; sed -i "5c$DEBUG_MODE" "$CONFIG_FILE"; echo "Debug $([[ $DEBUG_MODE -eq 1 ]] && echo 'enabled' || echo 'disabled')";;
+            6) systemctl disable --now wg-monitor.timer; rm -f "$SERVICE_UNIT" "$TIMER_UNIT"; systemctl daemon-reload; rm -r "$STATE_DIR" "$LOG_DIR"; echo "Everything removed"; exit;;
             7) exit;;
-            *) echo "Opzione non valida";;
+            *) echo "Invalid option";;
         esac
     done
 }
@@ -223,5 +223,5 @@ show_menu() {
 case "$1" in
     install) setup_install ;;  
     monitor) do_monitor ;;  
-    *) [[ -f "$CONFIG_FILE" ]] && show_menu || { echo "Primo avvio: setup..."; setup_install; } ;;
+    *) [[ -f "$CONFIG_FILE" ]] && show_menu || { echo "First start: running setup..."; setup_install; } ;;
 esac
